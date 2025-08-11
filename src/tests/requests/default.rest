@@ -1,0 +1,2 @@
+GET localhost:3000/get_key HTTP/1.1
+content_type: application/json
