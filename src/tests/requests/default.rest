@@ -9,7 +9,7 @@ Content-Type: application/json
   "user_id": "user-123"
 }
 
-### Link Pluggy Item to User (after Connect widget success)
+### Link Pluggy Item to User
 POST http://localhost:3000/connect/items
 Content-Type: application/json
 
@@ -18,7 +18,7 @@ Content-Type: application/json
   "item_id": "item-id-from-pluggy"
 }
 
-### Register Pluggy Webhooks (requires WEBHOOK_BASE_URL)
+### Register Pluggy Webhooks
 POST http://localhost:3000/webhooks/pluggy/register
 Content-Type: application/json
 

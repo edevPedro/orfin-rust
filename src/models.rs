@@ -4,50 +4,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
-#[sqlx(type_name = "text")]
-pub enum PaymentSource {
-    #[serde(rename = "pluggy")]
-    Pluggy,
-    #[serde(rename = "android_notification")]
-    AndroidNotification,
-}
-
-impl PaymentSource {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pluggy => "pluggy",
-            Self::AndroidNotification => "android_notification",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Eq)]
-#[sqlx(type_name = "text")]
-pub enum PaymentStatus {
-    #[serde(rename = "pending")]
-    Pending,
-    #[serde(rename = "processing")]
-    Processing,
-    #[serde(rename = "explained")]
-    Explained,
-    #[serde(rename = "failed")]
-    Failed,
-    #[serde(rename = "duplicate")]
-    Duplicate,
-}
-
-impl PaymentStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Processing => "processing",
-            Self::Explained => "explained",
-            Self::Failed => "failed",
-            Self::Duplicate => "duplicate",
-        }
-    }
-}
+pub const SOURCE_PLUGGY: &str = "pluggy";
+pub const SOURCE_ANDROID: &str = "android_notification";
+pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_DUPLICATE: &str = "duplicate";
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct PaymentEvent {
@@ -85,8 +45,19 @@ pub struct ConnectTokenRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct LinkItemRequest {
+    pub user_id: String,
+    pub item_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PaymentsQuery {
     pub user_id: String,
     pub status: Option<String>,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterWebhookRequest {
+    pub events: Option<Vec<String>>,
 }
