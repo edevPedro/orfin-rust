@@ -1,13 +1,20 @@
 [package]
 name = "orfin-backend"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-axum = "0.8.4"
+axum = { version = "0.8.4", features = ["macros"] }
+chrono = { version = "0.4.41", features = ["serde"] }
 dotenvy = "0.15.7"
-env = "1.0.1"
-reqwest = { version = "0.12.22", features = ["json"] }
-serde = "1.0.219"
+reqwest = { version = "0.12.22", default-features = false, features = ["json", "rustls-tls"] }
+rust_decimal = { version = "1.37.2", features = ["serde-with-str"] }
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"
+sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "rust_decimal"] }
+thiserror = "2.0.12"
 tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread"] }
+tower-http = { version = "0.6.6", features = ["trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.17.0", features = ["serde", "v4"] }
