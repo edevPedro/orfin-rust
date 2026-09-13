@@ -1,2 +1,95 @@
-GET localhost:3000/get_key HTTP/1.1
-content_type: application/json
+### Health
+GET http://localhost:3000/health
+
+### Create Pluggy Connect Token
+POST http://localhost:3000/connect/token
+Content-Type: application/json
+
+{
+  "user_id": "user-123"
+}
+
+### Link Pluggy Item to User
+POST http://localhost:3000/connect/items
+Content-Type: application/json
+
+{
+  "user_id": "user-123",
+  "item_id": "item-id-from-pluggy"
+}
+
+### Register Pluggy Webhooks
+POST http://localhost:3000/webhooks/pluggy/register
+Content-Type: application/json
+
+{
+  "events": ["transactions/created", "item/created", "item/updated"]
+}
+
+### Register FCM Push Token
+POST http://localhost:3000/devices/push-token
+Content-Type: application/json
+
+{
+  "user_id": "user-123",
+  "platform": "android",
+  "fcm_token": "fcm-device-token"
+}
+
+### Link Telegram Channel
+POST http://localhost:3000/channels/link
+Content-Type: application/json
+
+{
+  "user_id": "user-123",
+  "channel": "telegram",
+  "target": "123456789",
+  "enabled": true
+}
+
+### Link Discord Channel
+POST http://localhost:3000/channels/link
+Content-Type: application/json
+
+{
+  "user_id": "user-123",
+  "channel": "discord",
+  "target": "https://discord.com/api/webhooks/xxx/yyy",
+  "enabled": true
+}
+
+### List Categories
+GET http://localhost:3000/categories
+
+### List Payments
+GET http://localhost:3000/payments?user_id=user-123&status=awaiting_user&limit=20
+
+### List Awaiting Payments
+GET http://localhost:3000/payments/awaiting?user_id=user-123&limit=20
+
+### Ingest Android Notification Payment
+POST http://localhost:3000/payments/from-notification
+Content-Type: application/json
+
+{
+  "user_id": "user-123",
+  "external_id": "notif-fingerprint-abc",
+  "amount": "45.90",
+  "currency": "BRL",
+  "description": "Compra no débito",
+  "merchant": "Mercado Extra",
+  "paid_at": "2026-09-13T13:30:00Z",
+  "raw_payload": {
+    "package": "com.nu.production",
+    "title": "Compra aprovada"
+  }
+}
+
+### Explain / Categorize Payment
+POST http://localhost:3000/payments/00000000-0000-0000-0000-000000000000/explain
+Content-Type: application/json
+
+{
+  "category": "alimentacao",
+  "note": "compras da semana"
+}
