@@ -77,5 +77,5 @@ Por enquanto `user_id` vai no body/query (sem JWT). Dívida técnica documentada
 
 ## Fora deste repo
 
-- App web/mobile: [orfin-app](https://github.com/edevPedro/orfin-app) (Expo + NotificationListener Android)
+- App web/mobile: pasta/repo separado `orfin-app` (Expo + NotificationListener Android)
 - WhatsApp (outro worker)
