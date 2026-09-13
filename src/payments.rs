@@ -3,11 +3,12 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::categorize::suggest_category;
+use crate::categorize::{learn_merchant_rule, suggest_category};
 use crate::config::Config;
 use crate::models::{
-    ExplainPaymentRequest, NotificationPaymentRequest, PaymentEvent, SOURCE_ANDROID, SOURCE_PLUGGY,
-    STATUS_AWAITING_USER, STATUS_CATEGORIZED, STATUS_DUPLICATE,
+    ExplainPaymentRequest, NotificationPaymentRequest, OcrPaymentRequest, PaymentEvent,
+    SOURCE_ANDROID, SOURCE_OCR, SOURCE_PLUGGY, STATUS_AWAITING_USER, STATUS_CATEGORIZED,
+    STATUS_DUPLICATE,
 };
 use crate::notify::{on_new_payment, on_payment_categorized};
 use crate::pluggy::{PluggyClient, PluggyTransaction, PluggyWebhookPayload};
@@ -104,6 +105,65 @@ pub async fn ingest_notification(
         req.paid_at,
         req.raw_payload,
         status,
+        None,
+    )
+    .await?;
+
+    if let Some(payment) = payment.as_ref() {
+        if payment.status == STATUS_AWAITING_USER {
+            on_new_payment(pool, config, payment).await;
+        }
+    }
+
+    Ok(payment.map(|row| row.id))
+}
+
+pub async fn ingest_ocr(
+    pool: &PgPool,
+    config: &Config,
+    req: OcrPaymentRequest,
+) -> Result<Option<Uuid>, PaymentError> {
+    let status = if find_duplicate(pool, &req.user_id, req.amount, req.paid_at, SOURCE_OCR)
+        .await?
+        .is_some()
+    {
+        STATUS_DUPLICATE
+    } else {
+        STATUS_AWAITING_USER
+    };
+
+    let suggested = if status == STATUS_DUPLICATE {
+        None
+    } else {
+        Some(
+            suggest_category(
+                pool,
+                &req.user_id,
+                req.merchant.as_deref(),
+                req.description
+                    .as_deref()
+                    .or(req.ocr_text.as_deref()),
+                None,
+            )
+            .await?,
+        )
+    };
+
+    let payment = insert_payment(
+        pool,
+        &req.user_id,
+        SOURCE_OCR,
+        &req.external_id,
+        req.amount,
+        req.currency.as_deref().unwrap_or("BRL"),
+        req.description.as_deref(),
+        req.merchant.as_deref(),
+        None,
+        suggested.as_deref(),
+        req.paid_at,
+        req.raw_payload,
+        status,
+        req.ocr_text.as_deref(),
     )
     .await?;
 
@@ -165,6 +225,14 @@ pub async fn explain_payment(
         .fetch_optional(pool)
         .await?
         .ok_or(PaymentError::NotFound)?;
+
+    learn_merchant_rule(
+        pool,
+        &payment.user_id,
+        payment.merchant.as_deref(),
+        &req.category,
+    )
+    .await?;
 
     on_payment_categorized(pool, config, &payment).await;
     Ok(payment)
@@ -267,6 +335,7 @@ async fn save_pluggy_tx(
         paid_at,
         raw,
         STATUS_AWAITING_USER,
+        None,
     )
     .await?;
 
@@ -291,11 +360,12 @@ async fn insert_payment(
     paid_at: DateTime<Utc>,
     raw_payload: Option<serde_json::Value>,
     status: &str,
+    ocr_text: Option<&str>,
 ) -> Result<Option<PaymentEvent>, PaymentError> {
     let query = format!(
         "INSERT INTO payment_events \
-            (user_id, source, external_id, amount, currency, description, merchant, category, suggested_category, paid_at, raw_payload, status) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+            (user_id, source, external_id, amount, currency, description, merchant, category, suggested_category, paid_at, raw_payload, status, ocr_text) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) \
          ON CONFLICT (source, external_id) DO NOTHING \
          RETURNING {PAYMENT_COLS}"
     );
@@ -313,6 +383,7 @@ async fn insert_payment(
         .bind(paid_at)
         .bind(raw_payload)
         .bind(status)
+        .bind(ocr_text)
         .fetch_optional(pool)
         .await?)
 }

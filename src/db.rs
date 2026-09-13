@@ -14,6 +14,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
     for file in [
         include_str!("../migrations/001_payment_events.sql"),
         include_str!("../migrations/002_realtime_loop.sql"),
+        include_str!("../migrations/003_reports_alerts_reconcile.sql"),
     ] {
         for statement in file.split(';') {
             let statement = statement.trim();

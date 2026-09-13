@@ -121,6 +121,33 @@ async fn match_user_rule(
     }))
 }
 
+/// After the user explains a payment, remember the merchant → category mapping.
+pub async fn learn_merchant_rule(
+    pool: &PgPool,
+    user_id: &str,
+    merchant: Option<&str>,
+    category_id: &str,
+) -> Result<(), sqlx::Error> {
+    let Some(merchant) = merchant.map(str::trim).filter(|m| !m.is_empty()) else {
+        return Ok(());
+    };
+
+    sqlx::query(
+        "INSERT INTO user_category_rules (user_id, match_type, match_value, category_id) \
+         SELECT $1, 'merchant_contains', $2, $3 \
+         WHERE EXISTS (SELECT 1 FROM categories WHERE id = $3) \
+         ON CONFLICT (user_id, match_type, match_value) DO UPDATE \
+         SET category_id = EXCLUDED.category_id",
+    )
+    .bind(user_id)
+    .bind(merchant)
+    .bind(category_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 fn normalize_slug(value: &str) -> String {
     value
         .trim()

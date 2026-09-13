@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub const SOURCE_PLUGGY: &str = "pluggy";
 pub const SOURCE_ANDROID: &str = "android_notification";
+pub const SOURCE_OCR: &str = "receipt_ocr";
 
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_AWAITING_USER: &str = "awaiting_user";
@@ -15,6 +16,13 @@ pub const STATUS_FAILED: &str = "failed";
 
 pub const CHANNEL_DISCORD: &str = "discord";
 pub const CHANNEL_TELEGRAM: &str = "telegram";
+
+pub const ALERT_BUDGET_MONTHLY: &str = "budget_monthly";
+pub const ALERT_LARGE_PURCHASE: &str = "large_purchase";
+pub const ALERT_UNCATEGORIZED_STREAK: &str = "uncategorized_streak";
+
+pub const RECONCILE_UNMATCHED: &str = "unmatched";
+pub const RECONCILE_MATCHED: &str = "matched";
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct PaymentEvent {
@@ -52,6 +60,57 @@ pub struct NotificationPaymentRequest {
     pub merchant: Option<String>,
     pub paid_at: DateTime<Utc>,
     pub raw_payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OcrPaymentRequest {
+    pub user_id: String,
+    pub external_id: String,
+    pub amount: Decimal,
+    pub currency: Option<String>,
+    pub description: Option<String>,
+    pub merchant: Option<String>,
+    pub paid_at: DateTime<Utc>,
+    pub raw_payload: Option<serde_json::Value>,
+    pub ocr_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportSummaryQuery {
+    pub user_id: String,
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserIdQuery {
+    pub user_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAlertRequest {
+    pub user_id: String,
+    pub kind: String,
+    pub threshold: Option<Decimal>,
+    pub category_id: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReconcileRunRequest {
+    pub user_id: String,
+    pub window_minutes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct AlertRule {
+    pub id: Uuid,
+    pub user_id: String,
+    pub kind: String,
+    pub threshold: Option<Decimal>,
+    pub category_id: Option<String>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]

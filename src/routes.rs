@@ -10,15 +10,18 @@ use uuid::Uuid;
 
 use crate::categorize::list_categories;
 use crate::models::{
-    ChannelLinkRequest, ConnectTokenRequest, ExplainPaymentRequest, LinkItemRequest,
-    NotificationPaymentRequest, PaymentsQuery, PushTokenRequest, RegisterWebhookRequest,
-    CHANNEL_DISCORD, CHANNEL_TELEGRAM,
+    ChannelLinkRequest, ConnectTokenRequest, CreateAlertRequest, ExplainPaymentRequest,
+    LinkItemRequest, NotificationPaymentRequest, OcrPaymentRequest, PaymentsQuery,
+    PushTokenRequest, ReconcileRunRequest, RegisterWebhookRequest, ReportSummaryQuery,
+    UserIdQuery, CHANNEL_DISCORD, CHANNEL_TELEGRAM,
 };
 use crate::payments::{
-    explain_payment, ingest_notification, link_channel, link_item, list_awaiting, list_payments,
-    process_webhook, register_push_token,
+    explain_payment, ingest_notification, ingest_ocr, link_channel, link_item, list_awaiting,
+    list_payments, process_webhook, register_push_token,
 };
 use crate::pluggy::PluggyWebhookPayload;
+use crate::reconcile;
+use crate::reports;
 use crate::AppState;
 
 pub fn router(state: AppState) -> Router {
@@ -34,10 +37,15 @@ pub fn router(state: AppState) -> Router {
         .route("/payments", get(list))
         .route("/payments/awaiting", get(awaiting))
         .route("/payments/from-notification", post(from_notification))
+        .route("/payments/from-ocr", post(from_ocr))
         .route("/payments/{id}/explain", post(explain))
         .route("/devices/push-token", post(push_token))
         .route("/channels/link", post(channel_link))
         .route("/categories", get(categories))
+        .route("/reports/summary", get(report_summary))
+        .route("/alerts", get(alerts_list).post(alerts_create))
+        .route("/alerts/check", get(alerts_check))
+        .route("/reconcile/run", post(reconcile_run))
         .with_state(state)
 }
 
@@ -151,6 +159,23 @@ async fn from_notification(
     }
 }
 
+async fn from_ocr(
+    State(state): State<AppState>,
+    Json(body): Json<OcrPaymentRequest>,
+) -> impl IntoResponse {
+    match ingest_ocr(&state.pool, &state.config, body).await {
+        Ok(Some(id)) => ok(
+            StatusCode::CREATED,
+            serde_json::json!({ "status": "created", "payment_event_id": id }),
+        ),
+        Ok(None) => ok(
+            StatusCode::OK,
+            serde_json::json!({ "status": "duplicate_or_ignored" }),
+        ),
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
 async fn explain(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -210,6 +235,60 @@ async fn channel_link(
 async fn categories(State(state): State<AppState>) -> impl IntoResponse {
     match list_categories(&state.pool).await {
         Ok(categories) => ok(StatusCode::OK, serde_json::json!({ "categories": categories })),
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn report_summary(
+    State(state): State<AppState>,
+    Query(query): Query<ReportSummaryQuery>,
+) -> impl IntoResponse {
+    match reports::summary(&state.pool, &query.user_id, query.from, query.to).await {
+        Ok(summary) => ok(StatusCode::OK, summary),
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn alerts_list(
+    State(state): State<AppState>,
+    Query(query): Query<UserIdQuery>,
+) -> impl IntoResponse {
+    match reports::list_alerts(&state.pool, &query.user_id).await {
+        Ok(alerts) => ok(StatusCode::OK, serde_json::json!({ "alerts": alerts })),
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn alerts_create(
+    State(state): State<AppState>,
+    Json(body): Json<CreateAlertRequest>,
+) -> impl IntoResponse {
+    match reports::create_alert(&state.pool, body).await {
+        Ok(alert) => ok(StatusCode::CREATED, serde_json::json!({ "alert": alert })),
+        Err(reports::ReportError::InvalidKind(kind)) => {
+            err(StatusCode::BAD_REQUEST, format!("invalid alert kind: {kind}"))
+        }
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn alerts_check(
+    State(state): State<AppState>,
+    Query(query): Query<UserIdQuery>,
+) -> impl IntoResponse {
+    match reports::check_alerts(&state.pool, &query.user_id).await {
+        Ok(alerts) => ok(StatusCode::OK, alerts),
+        Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn reconcile_run(
+    State(state): State<AppState>,
+    Json(body): Json<ReconcileRunRequest>,
+) -> impl IntoResponse {
+    let window = body.window_minutes.unwrap_or(30);
+    match reconcile::run(&state.pool, &body.user_id, window).await {
+        Ok(result) => ok(StatusCode::OK, result),
         Err(error) => err(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
 }

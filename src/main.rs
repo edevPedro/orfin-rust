@@ -7,6 +7,8 @@ mod notify;
 mod payments;
 mod pluggy;
 mod push;
+mod reconcile;
+mod reports;
 mod routes;
 
 use std::sync::Arc;
