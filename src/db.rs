@@ -11,13 +11,17 @@ pub async fn create_pool(config: &Config) -> Result<PgPool, sqlx::Error> {
 }
 
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
-    let migration = include_str!("../migrations/001_payment_events.sql");
-    for statement in migration.split(';') {
-        let statement = statement.trim();
-        if statement.is_empty() {
-            continue;
+    for file in [
+        include_str!("../migrations/001_payment_events.sql"),
+        include_str!("../migrations/002_realtime_loop.sql"),
+    ] {
+        for statement in file.split(';') {
+            let statement = statement.trim();
+            if statement.is_empty() {
+                continue;
+            }
+            sqlx::query(statement).execute(pool).await?;
         }
-        sqlx::query(statement).execute(pool).await?;
     }
     Ok(())
 }

@@ -8,6 +8,8 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub webhook_base_url: Option<String>,
+    pub fcm_server_key: Option<String>,
+    pub telegram_bot_token: Option<String>,
 }
 
 impl Config {
@@ -23,6 +25,8 @@ impl Config {
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(3000),
             webhook_base_url: env::var("WEBHOOK_BASE_URL").ok(),
+            fcm_server_key: env::var("FCM_SERVER_KEY").ok(),
+            telegram_bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
         }
     }
 }

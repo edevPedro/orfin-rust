@@ -3,13 +3,16 @@ use rust_decimal::Decimal;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::categorize::suggest_category;
+use crate::config::Config;
 use crate::models::{
-    NotificationPaymentRequest, PaymentEvent, SOURCE_ANDROID, SOURCE_PLUGGY, STATUS_DUPLICATE,
-    STATUS_PENDING,
+    ExplainPaymentRequest, NotificationPaymentRequest, PaymentEvent, SOURCE_ANDROID, SOURCE_PLUGGY,
+    STATUS_AWAITING_USER, STATUS_CATEGORIZED, STATUS_DUPLICATE,
 };
+use crate::notify::{on_new_payment, on_payment_categorized};
 use crate::pluggy::{PluggyClient, PluggyTransaction, PluggyWebhookPayload};
 
-const PAYMENT_COLS: &str = "id, user_id, source, external_id, amount, currency, description, merchant, category, paid_at, raw_payload, status, explained_at, created_at";
+const PAYMENT_COLS: &str = "id, user_id, source, external_id, amount, currency, description, merchant, category, suggested_category, user_note, paid_at, raw_payload, status, explained_at, created_at";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentError {
@@ -19,11 +22,14 @@ pub enum PaymentError {
     Pluggy(#[from] crate::pluggy::PluggyError),
     #[error("invalid date: {0}")]
     InvalidDate(String),
+    #[error("payment not found")]
+    NotFound,
 }
 
 pub async fn process_webhook(
     pool: &PgPool,
     pluggy: &PluggyClient,
+    config: &Config,
     payload: PluggyWebhookPayload,
 ) -> Result<Vec<String>, PaymentError> {
     if payload.event != "transactions/created" {
@@ -46,8 +52,10 @@ pub async fn process_webhook(
 
     let mut ids = Vec::new();
     for tx in pluggy.fetch_transactions(&link).await?.results {
-        if let Some(id) = save_pluggy_tx(pool, &user_id, &tx, payload.item_id.as_deref()).await? {
-            ids.push(id.to_string());
+        if let Some(payment) =
+            save_pluggy_tx(pool, config, &user_id, &tx, payload.item_id.as_deref()).await?
+        {
+            ids.push(payment.id.to_string());
         }
     }
     Ok(ids)
@@ -55,6 +63,7 @@ pub async fn process_webhook(
 
 pub async fn ingest_notification(
     pool: &PgPool,
+    config: &Config,
     req: NotificationPaymentRequest,
 ) -> Result<Option<Uuid>, PaymentError> {
     let status = if find_duplicate(pool, &req.user_id, req.amount, req.paid_at, SOURCE_ANDROID)
@@ -63,10 +72,25 @@ pub async fn ingest_notification(
     {
         STATUS_DUPLICATE
     } else {
-        STATUS_PENDING
+        STATUS_AWAITING_USER
     };
 
-    insert_payment(
+    let suggested = if status == STATUS_DUPLICATE {
+        None
+    } else {
+        Some(
+            suggest_category(
+                pool,
+                &req.user_id,
+                req.merchant.as_deref(),
+                req.description.as_deref(),
+                None,
+            )
+            .await?,
+        )
+    };
+
+    let payment = insert_payment(
         pool,
         &req.user_id,
         SOURCE_ANDROID,
@@ -76,11 +100,20 @@ pub async fn ingest_notification(
         req.description.as_deref(),
         req.merchant.as_deref(),
         None,
+        suggested.as_deref(),
         req.paid_at,
         req.raw_payload,
         status,
     )
-    .await
+    .await?;
+
+    if let Some(payment) = payment.as_ref() {
+        if payment.status == STATUS_AWAITING_USER {
+            on_new_payment(pool, config, payment).await;
+        }
+    }
+
+    Ok(payment.map(|row| row.id))
 }
 
 pub async fn list_payments(
@@ -90,7 +123,9 @@ pub async fn list_payments(
     limit: i64,
 ) -> Result<Vec<PaymentEvent>, PaymentError> {
     let query = format!(
-        "SELECT {PAYMENT_COLS} FROM payment_events WHERE user_id = $1 AND ($2::text IS NULL OR status = $2) ORDER BY paid_at DESC LIMIT $3"
+        "SELECT {PAYMENT_COLS} FROM payment_events \
+         WHERE user_id = $1 AND ($2::text IS NULL OR status = $2) \
+         ORDER BY paid_at DESC LIMIT $3"
     );
     Ok(sqlx::query_as::<_, PaymentEvent>(&query)
         .bind(user_id)
@@ -100,9 +135,86 @@ pub async fn list_payments(
         .await?)
 }
 
+pub async fn list_awaiting(
+    pool: &PgPool,
+    user_id: &str,
+    limit: i64,
+) -> Result<Vec<PaymentEvent>, PaymentError> {
+    list_payments(pool, user_id, Some(STATUS_AWAITING_USER), limit).await
+}
+
+pub async fn explain_payment(
+    pool: &PgPool,
+    config: &Config,
+    payment_id: Uuid,
+    req: ExplainPaymentRequest,
+) -> Result<PaymentEvent, PaymentError> {
+    let query = format!(
+        "UPDATE payment_events \
+         SET category = $2, user_note = $3, status = $4, explained_at = now() \
+         WHERE id = $1 AND status = $5 \
+         RETURNING {PAYMENT_COLS}"
+    );
+
+    let payment = sqlx::query_as::<_, PaymentEvent>(&query)
+        .bind(payment_id)
+        .bind(&req.category)
+        .bind(req.note.as_deref())
+        .bind(STATUS_CATEGORIZED)
+        .bind(STATUS_AWAITING_USER)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(PaymentError::NotFound)?;
+
+    on_payment_categorized(pool, config, &payment).await;
+    Ok(payment)
+}
+
+pub async fn register_push_token(
+    pool: &PgPool,
+    user_id: &str,
+    platform: &str,
+    fcm_token: &str,
+) -> Result<(), PaymentError> {
+    sqlx::query(
+        "INSERT INTO device_tokens (user_id, platform, fcm_token) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (fcm_token) DO UPDATE \
+         SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform",
+    )
+    .bind(user_id)
+    .bind(platform)
+    .bind(fcm_token)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn link_channel(
+    pool: &PgPool,
+    user_id: &str,
+    channel: &str,
+    target: &str,
+    enabled: bool,
+) -> Result<(), PaymentError> {
+    sqlx::query(
+        "INSERT INTO channel_links (user_id, channel, target, enabled) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (user_id, channel, target) DO UPDATE SET enabled = EXCLUDED.enabled",
+    )
+    .bind(user_id)
+    .bind(channel)
+    .bind(target)
+    .bind(enabled)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn link_item(pool: &PgPool, item_id: &str, user_id: &str) -> Result<(), PaymentError> {
     sqlx::query(
-        "INSERT INTO pluggy_item_users (item_id, user_id) VALUES ($1, $2) ON CONFLICT (item_id) DO UPDATE SET user_id = EXCLUDED.user_id",
+        "INSERT INTO pluggy_item_users (item_id, user_id) VALUES ($1, $2) \
+         ON CONFLICT (item_id) DO UPDATE SET user_id = EXCLUDED.user_id",
     )
     .bind(item_id)
     .bind(user_id)
@@ -113,10 +225,11 @@ pub async fn link_item(pool: &PgPool, item_id: &str, user_id: &str) -> Result<()
 
 async fn save_pluggy_tx(
     pool: &PgPool,
+    config: &Config,
     user_id: &str,
     tx: &PluggyTransaction,
     item_id: Option<&str>,
-) -> Result<Option<Uuid>, PaymentError> {
+) -> Result<Option<PaymentEvent>, PaymentError> {
     if tx.amount >= 0.0 {
         return Ok(None);
     }
@@ -131,7 +244,16 @@ async fn save_pluggy_tx(
         }
     }
 
-    insert_payment(
+    let suggested = suggest_category(
+        pool,
+        user_id,
+        merchant.as_deref(),
+        tx.description.as_deref(),
+        tx.category.as_deref(),
+    )
+    .await?;
+
+    let payment = insert_payment(
         pool,
         user_id,
         SOURCE_PLUGGY,
@@ -141,11 +263,18 @@ async fn save_pluggy_tx(
         tx.description.as_deref(),
         merchant.as_deref(),
         tx.category.as_deref(),
+        Some(&suggested),
         paid_at,
         raw,
-        STATUS_PENDING,
+        STATUS_AWAITING_USER,
     )
-    .await
+    .await?;
+
+    if let Some(payment) = payment.as_ref() {
+        on_new_payment(pool, config, payment).await;
+    }
+
+    Ok(payment)
 }
 
 async fn insert_payment(
@@ -158,12 +287,17 @@ async fn insert_payment(
     description: Option<&str>,
     merchant: Option<&str>,
     category: Option<&str>,
+    suggested_category: Option<&str>,
     paid_at: DateTime<Utc>,
     raw_payload: Option<serde_json::Value>,
     status: &str,
-) -> Result<Option<Uuid>, PaymentError> {
+) -> Result<Option<PaymentEvent>, PaymentError> {
     let query = format!(
-        "INSERT INTO payment_events (user_id, source, external_id, amount, currency, description, merchant, category, paid_at, raw_payload, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (source, external_id) DO NOTHING RETURNING {PAYMENT_COLS}"
+        "INSERT INTO payment_events \
+            (user_id, source, external_id, amount, currency, description, merchant, category, suggested_category, paid_at, raw_payload, status) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+         ON CONFLICT (source, external_id) DO NOTHING \
+         RETURNING {PAYMENT_COLS}"
     );
 
     Ok(sqlx::query_as::<_, PaymentEvent>(&query)
@@ -175,12 +309,12 @@ async fn insert_payment(
         .bind(description)
         .bind(merchant)
         .bind(category)
+        .bind(suggested_category)
         .bind(paid_at)
         .bind(raw_payload)
         .bind(status)
         .fetch_optional(pool)
-        .await?
-        .map(|row| row.id))
+        .await?)
 }
 
 async fn find_duplicate(
@@ -191,7 +325,11 @@ async fn find_duplicate(
     exclude_source: &str,
 ) -> Result<Option<PaymentEvent>, PaymentError> {
     let query = format!(
-        "SELECT {PAYMENT_COLS} FROM payment_events WHERE user_id = $1 AND amount = $2 AND paid_at BETWEEN $3 AND $4 AND source <> $5 AND status <> 'duplicate' ORDER BY CASE source WHEN 'pluggy' THEN 0 ELSE 1 END, created_at ASC LIMIT 1"
+        "SELECT {PAYMENT_COLS} FROM payment_events \
+         WHERE user_id = $1 AND amount = $2 AND paid_at BETWEEN $3 AND $4 \
+           AND source <> $5 AND status <> 'duplicate' \
+         ORDER BY CASE source WHEN 'pluggy' THEN 0 ELSE 1 END, created_at ASC \
+         LIMIT 1"
     );
     Ok(sqlx::query_as::<_, PaymentEvent>(&query)
         .bind(user_id)
@@ -204,10 +342,12 @@ async fn find_duplicate(
 }
 
 async fn get_user_for_item(pool: &PgPool, item_id: &str) -> Result<Option<String>, PaymentError> {
-    Ok(sqlx::query_scalar("SELECT user_id FROM pluggy_item_users WHERE item_id = $1")
-        .bind(item_id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_scalar("SELECT user_id FROM pluggy_item_users WHERE item_id = $1")
+            .bind(item_id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 fn parse_date(value: &str) -> Result<DateTime<Utc>, PaymentError> {

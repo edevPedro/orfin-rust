@@ -1,8 +1,12 @@
+mod categorize;
+mod channels;
 mod config;
 mod db;
 mod models;
+mod notify;
 mod payments;
 mod pluggy;
+mod push;
 mod routes;
 
 use std::sync::Arc;
@@ -36,7 +40,9 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
-    let pool = create_pool(&config).await.expect("database connection failed");
+    let pool = create_pool(&config)
+        .await
+        .expect("database connection failed");
     run_migrations(&pool).await.expect("migration failed");
 
     let state = AppState {
