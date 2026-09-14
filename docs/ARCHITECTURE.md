@@ -296,6 +296,6 @@ Health: `curl localhost:3000/health`
 
 ## 9. App (resumo)
 
-Ver `orfin-app/docs/ARCHITECTURE.md` para telas, módulo NLS, OCR e design system.
+Ver `apps/orfin-app/docs/ARCHITECTURE.md` para telas, módulo NLS, OCR e design system.
 
 Contrato mínimo que o app consome: awaiting, payments, explain, from-ocr, categories, channels/link, reports/summary, alerts, reconcile/run.

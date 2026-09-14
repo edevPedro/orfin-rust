@@ -6,7 +6,7 @@ Como subir, testar e evoluir o Orfin sem quebrar o desenho KISS.
 
 1. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — conceitos e algoritmos  
 2. [`GLOSSARY.md`](./GLOSSARY.md) — valores canônicos de status/source/alerts  
-3. App: `orfin-app/docs/ARCHITECTURE.md`
+3. App: `apps/orfin-app/docs/ARCHITECTURE.md`
 
 ## Subir o backend
 

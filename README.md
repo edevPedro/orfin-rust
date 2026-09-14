@@ -56,5 +56,5 @@ Categorias seed: `alimentacao`, `transporte`, `moradia`, `lazer`, `saude`, `educ
 
 ## Cliente
 
-App web/mobile: repositório/pasta **`orfin-app`** (Expo + NotificationListener + ML Kit).  
-Ver `orfin-app/docs/ARCHITECTURE.md`.
+App web/mobile: **`apps/orfin-app/`** (Expo + NotificationListener + ML Kit).  
+Ver [`apps/orfin-app/docs/ARCHITECTURE.md`](./apps/orfin-app/docs/ARCHITECTURE.md).
